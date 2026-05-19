@@ -59,12 +59,15 @@ class MapGenerator:
             (workspace_id,),
         )
         file_stats = defaultdict(lambda: {"functions": 0, "classes": 0, "methods": 0})
+        # Map singular DB types to plural dict keys
+        type_map = {"function": "functions", "class": "classes", "method": "methods"}
         for row in cursor.fetchall():
             file_path = row["file_path"]
             symbol_type = row["symbol_type"]
             count = row["count"]
-            if symbol_type in file_stats[file_path]:
-                file_stats[file_path][symbol_type] = count
+            plural = type_map.get(symbol_type, symbol_type)
+            if plural in file_stats[file_path]:
+                file_stats[file_path][plural] = count
 
         # Calculate language stats
         lang_stats = defaultdict(
@@ -203,7 +206,7 @@ class MapGenerator:
                     current[part] = {}
                 current = current[part]
             if len(parts) > 0:
-                current[parts[-1]] = {"_file": True}
+                current[parts[-1]] = {"_file": True, "_path": file_path}
 
         # Get symbol counts for files
         conn = sqlite3.connect(self.storage.db_path)
@@ -246,8 +249,9 @@ class MapGenerator:
 
             if isinstance(value, dict):
                 if value.get("_file"):
-                    # It's a file
-                    count = symbol_counts.get(key, 0)
+                    # It's a file — use stored absolute path for symbol lookup
+                    abs_path = value.get("_path", key)
+                    count = symbol_counts.get(abs_path, 0)
                     lines.append(f"{prefix}{connector}{key} ({count} symbols)")
                 else:
                     # It's a directory

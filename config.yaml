@@ -1,0 +1,99 @@
+ollama:
+  base_url: "http://172.28.128.1:11434"      # Ollama API endpoint
+  embed_model: "mxbai-embed-large"            # Embedding model (code-optimized)
+  tag_model: "qwen3.5:latest"                 # Tagging model (LLM)
+  timeout_s: 30.0
+  embed_timeout_s: 120.0
+  max_retries: 3
+  auto_pull: true                            # Auto-pull models if missing
+
+rag:
+  index_path: "./code_rag_index"              # ChromaDB + SQLite location
+  chunk_strategy: "ast"                       # "ast" | "regex" | "text"
+  max_embed_text_length: 8000                 # Max chars for embedding
+  max_chunks_per_doc: 500
+  supported_extensions:
+    # Priority 1 : AST natif
+    - .py
+    # Priority 2 : Regex
+    - .js
+    - .mjs
+    - .ts
+    - .tsx
+    - .go
+    - .cs
+    - .rs
+    - .java
+    - .rb
+    - .php
+    - .c
+    - .h
+    - .cpp
+    - .swift
+    - .kt
+    # Config & docs
+    - .md
+    - .markdown
+    - .txt
+    - .yaml
+    - .yml
+    - .json
+    - .toml
+    - .cfg
+    - .ini
+    - .env
+    - .xml
+  default_exclude_patterns:
+    - ".git"
+    - "__pycache__"
+    - "node_modules"
+    - ".venv"
+    - "venv"
+    - "dist"
+    - "build"
+    - ".next"
+    - "*.min.js"
+    - "*.min.css"
+    - "*.lock"
+    - ".DS_Store"
+    - "*.egg-info"
+    - ".vscode-server"
+    - ".claude"
+    - ".mypy_cache"
+    - ".ruff_cache"
+
+hybrid_search:
+  enabled: true
+  alpha: 0.6                                  # 60% semantic, 40% keyword
+  beta: 0.4
+  fts5_table: "code_fts"
+
+tagging:
+  auto_tag_enabled: true
+  h2_enabled: false                           # LLM tagging (optional, slow)
+  timeout_ms: 30000
+  use_cache: true
+  cache_path: ".code_tag_cache.db"
+  taxonomy:
+    lang: ["python", "javascript", "typescript", "go", "csharp", "rust", "java", "ruby", "php"]
+    framework: ["fastapi", "django", "flask", "express", "nextjs", "react", "gin", "aspnet"]
+    layer: ["api", "model", "service", "utils", "config", "test", "middleware"]
+    design_pattern: ["repository", "factory", "singleton", "adapter", "observer", "middleware"]
+
+watcher:
+  enabled: false
+  debounce_ms: 3000
+  sync_deletions: true
+  max_workers: 4
+  default_watch_paths: []
+  default_recursive: true
+  exclude_patterns: []
+
+workspace:
+  auto_detect: true
+  cache_enabled: true
+
+logging:
+  level: "INFO"
+  format: "text"
+  file: ""
