@@ -1,0 +1,350 @@
+# MCP Code RAG Configuration Example
+# Copy this file to config.yaml and adjust values as needed.
+# All parameters are documented below with default recommendations.
+
+# ═══════════════════════════════════════════════════════════════════════════
+# OLLAMA CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+# Configure Ollama for embeddings (required) and semantic tagging (optional).
+# Ollama listens on http://172.28.128.1:11434 (WSL2) or http://localhost:11434 (native).
+
+ollama:
+  # Base URL for Ollama API endpoint.
+  # WSL2: http://172.28.128.1:11434 (resolve to host IP)
+  # Docker: http://ollama:11434 (service name in docker-compose)
+  # Native: http://localhost:11434
+  base_url: "http://172.28.128.1:11434"
+
+  # Embedding model for code vectorization.
+  # Recommended:
+  #   - "nomic-embed-text" (768 dims, 274MB) — default, good for general code
+  #   - "mxbai-embed-large" (1024 dims, 1.3GB) — better semantic understanding
+  #   - "snowflake-arctic-embed-m" (768 dims, 400MB) — balanced for code+text
+  # Pull with: ollama pull nomic-embed-text
+  embed_model: "nomic-embed-text"
+
+  # Tagging model for semantic tag extraction (H2 tagging, optional).
+  # Used only if tagging.h2_enabled=true (slower, adds semantics to heuristics).
+  # Recommended:
+  #   - "qwen2:1.5b" (2.8GB) — fast, good quality
+  #   - "llama2:7b" (3.8GB) — slower, higher quality
+  # Pull with: ollama pull qwen2:1.5b
+  tag_model: "qwen2:1.5b"
+
+  # General timeout for Ollama API calls (seconds).
+  # Covers tagging, model listing, and other non-embedding operations.
+  # Increase if network is slow or responses are delayed.
+  timeout_s: 30.0
+
+  # Embedding-specific timeout (seconds).
+  # Embeddings may take longer for large text (8000 chars max).
+  # Increase if you see timeout errors during indexing.
+  embed_timeout_s: 120.0
+
+  # Maximum retries for transient Ollama failures (network hiccups, overload).
+  # Recommended: 3 (retry up to 3 times before giving up).
+  max_retries: 3
+
+  # Automatically pull models if not available locally.
+  # If false: requires models to be pre-pulled via `ollama pull <model>`.
+  # If true: slower first index but no manual setup.
+  auto_pull: false
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RAG (Retrieval-Augmented Generation) CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+# Controls code indexing, chunking strategy, and embedding limits.
+
+rag:
+  # Absolute or relative path to persistent index directory.
+  # Contains:
+  #   - code_rag_index/chroma/ — ChromaDB vector database
+  #   - code_rag.db — SQLite metadata (path_index, symbol_index, etc.)
+  # Must be writable by the process. Use a volume mount in Docker.
+  index_path: "./code_rag_index"
+
+  # Code chunking strategy:
+  #   - "ast" — Python uses Python's ast module; others use regex patterns.
+  #             Best for structure preservation (1 chunk = 1 function/class).
+  #   - "regex" — All languages use regex patterns (fallback if AST unavailable).
+  #   - "text" — Simple text chunking (character count). Rarely used.
+  # Recommended: "ast" for best semantic clarity.
+  chunk_strategy: "ast"
+
+  # Maximum characters for text sent to Ollama embedding.
+  # If code+docstring+signature > this, text is truncated (signature preserved first).
+  # Larger = better context but slower embedding. Ollama typically handles 8000 chars.
+  # Recommended: 8000 (balance between quality and speed).
+  max_embed_text_length: 8000
+
+  # Maximum chunks extracted per file.
+  # Prevents explosion of chunks in files with many functions/classes.
+  # E.g., config files or generated code might produce many small chunks.
+  # Recommended: 500 (safeguard; rarely hit for typical codebases).
+  max_chunks_per_doc: 500
+  # Supported file extensions for indexing.
+  # Files matching these extensions will be scanned and indexed.
+  # Extensions not listed are silently skipped.
+  supported_extensions:
+    # Priority 1: Languages with full AST parsing (Python)
+    - .py
+
+    # Priority 2: Languages with regex pattern parsing (JavaScript, TypeScript, Go, etc.)
+    - .js       # JavaScript
+    - .mjs      # JavaScript modules
+    - .ts       # TypeScript
+    - .tsx      # TypeScript React
+    - .go       # Go
+    - .cs       # C#
+    - .rs       # Rust
+    - .java     # Java
+    - .rb       # Ruby
+    - .php      # PHP
+    - .c        # C
+    - .h        # C headers
+    - .cpp      # C++
+    - .swift    # Swift
+    - .kt       # Kotlin
+
+    # Priority 3: Config, documentation, and markup files (text chunking)
+    - .md       # Markdown
+    - .markdown # Markdown variant
+    - .txt      # Plain text
+    - .yaml     # YAML config
+    - .yml      # YAML variant
+    - .json     # JSON config (not *.lock)
+    - .toml     # TOML (Cargo.toml, pyproject.toml)
+    - .cfg      # Config
+    - .ini      # INI config
+    - .env      # Environment files
+    - .xml      # XML config and manifests
+
+  # Patterns to exclude from indexing by default.
+  # Matches are performed against relative paths from the scan root.
+  # These patterns prevent indexing of build outputs, dependencies, and temporary files.
+  # Can be overridden per index_project call via exclude_patterns parameter.
+  default_exclude_patterns:
+    - ".git"              # Git version control
+    - "__pycache__"       # Python compiled cache
+    - "node_modules"      # Node.js dependencies
+    - ".venv"             # Python virtual environment
+    - "venv"              # Alternative Python venv
+    - "dist"              # Build output directory
+    - "build"             # Build artifacts
+    - ".next"             # Next.js build output
+    - "*.min.js"          # Minified JavaScript
+    - "*.min.css"         # Minified CSS
+    - "*.lock"            # Lock files (package-lock.json, Cargo.lock, etc.)
+    - ".DS_Store"         # macOS metadata
+    - "*.egg-info"        # Python setuptools metadata
+    - ".vscode-server"    # VS Code server artifacts
+    - ".claude"           # Claude Code metadata
+    - ".mypy_cache"       # MyPy type checking cache
+    - ".ruff_cache"       # Ruff linter cache
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HYBRID SEARCH CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+# Controls the balance between keyword (BM25) and semantic (vector) search.
+# Hybrid search combines both to find code more accurately than either alone.
+
+hybrid_search:
+  # Enable hybrid search (semantic vector + keyword BM25).
+  # If false: only vector search is used (no FTS5 indexing).
+  # Recommended: true (hybrid finds more relevant code).
+  enabled: true
+
+  # Weight for semantic (vector) search results (alpha).
+  # Range: 0.0–1.0
+  # 0.6 = 60% semantic, 40% keyword (recommended balance).
+  # Increase (0.7+) if you trust embeddings more than keywords.
+  # Decrease (0.5-) if keywords are more important.
+  alpha: 0.6
+
+  # Weight for keyword (BM25) search results (beta).
+  # Automatically computed as (1 - alpha).
+  # beta = 0.4 when alpha = 0.6.
+  # No need to adjust; kept for clarity.
+  beta: 0.4
+
+  # SQLite FTS5 table name for full-text search.
+  # Do not change unless you want to use a custom table.
+  fts5_table: "code_fts"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TAGGING CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+# Automatic tag assignment for categorizing code by language, layer, pattern.
+# Tags help with search filtering and code organization.
+# H1 = heuristics (instant), H2 = LLM-based (slower, optional).
+
+tagging:
+  # Enable H1 heuristic tagging (instant, always recommended).
+  # Assigns tags based on:
+  #   - Language: file extension + content detection
+  #   - Type: test files, config files, documentation
+  #   - Layer: api, model, service, middleware, utils, etc.
+  # Cost: minimal (~5ms per file).
+  auto_tag_enabled: true
+
+  # Enable H2 LLM-based semantic tagging (slower, optional).
+  # Assigns semantic tags based on imports and code context:
+  #   - Framework: FastAPI, Django, Express, etc.
+  #   - Design pattern: Repository, Factory, Singleton, etc.
+  #   - Purpose: authentication, logging, validation, etc.
+  # Cost: ~100–500ms per file (depends on file size + model).
+  # Requires tag_model to be available. Results are cached in SQLite.
+  # Recommended: false for normal use; true only if you need semantic tags.
+  h2_enabled: false
+
+  # Timeout for tagging operations in milliseconds.
+  # Applies to both H1 (rarely hit) and H2 (LLM timeout).
+  # Increase if you see timeout errors with large files or slow Ollama.
+  timeout_ms: 30000
+
+  # Enable SQLite caching of tag results.
+  # Tags computed once and reused on subsequent indexes.
+  # Significantly speeds up re-indexing unchanged files.
+  # Recommended: true (unless you want fresh tags every time).
+  use_cache: true
+
+  # Path to the tag cache database (SQLite).
+  # Separate from code_rag.db to keep caches isolated.
+  cache_path: ".code_tag_cache.db"
+
+  # Taxonomy: categories of tags available for assignment.
+  # These constrain what tags can be applied (whitelist).
+  # Add or remove categories to customize tag vocabulary.
+  taxonomy:
+    # Programming languages
+    lang: ["python", "javascript", "typescript", "go", "csharp", "rust", "java", "ruby", "php"]
+
+    # Popular frameworks (used for H2 semantic tagging)
+    framework: ["fastapi", "django", "flask", "express", "nextjs", "react", "gin", "aspnet", "pytest"]
+
+    # Code layers / architectural roles
+    layer: ["api", "model", "service", "utils", "config", "test", "middleware", "scheduler"]
+
+    # Design patterns (used for H2 semantic tagging)
+    design_pattern: ["repository", "factory", "singleton", "adapter", "observer", "middleware", "strategy"]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FILE WATCHER CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+# Real-time monitoring of directory changes for automatic index updates.
+# Uses watchdog library with debounce to prevent rapid re-indexing.
+
+watcher:
+  # Enable file watcher service.
+  # If false: watch_directory tool cannot start a watcher.
+  # If true: watch_directory can be called to monitor directories.
+  # Recommended: false by default; enable via watch_directory call.
+  enabled: false
+
+  # Debounce time in milliseconds.
+  # Prevents rapid re-indexing when multiple files change in quick succession.
+  # E.g., `debounce_ms: 3000` waits 3s after last file change before indexing.
+  # Larger = fewer index updates but potentially stale data.
+  # Smaller = fresher data but more CPU.
+  # Recommended: 3000 (balance between responsiveness and efficiency).
+  debounce_ms: 3000
+
+  # Sync file deletions to index.
+  # If true: deleted files are removed from ChromaDB + SQLite.
+  # If false: deleted files leave orphaned entries in index.
+  # Recommended: true (keep index in sync with filesystem).
+  sync_deletions: true
+
+  # Maximum worker threads for concurrent file hashing + indexing.
+  # Higher = faster indexing but more CPU + memory.
+  # Typical: 4 (balance for modern machines).
+  max_workers: 4
+
+  # Default paths to watch on startup.
+  # Useful for Docker: pre-configured paths to monitor.
+  # Overridden by watch_directory calls.
+  default_watch_paths: []
+
+  # Watch subdirectories recursively by default.
+  # Recommended: true (watch entire project tree).
+  default_recursive: true
+
+  # Patterns to exclude from watcher.
+  # Same format as rag.default_exclude_patterns.
+  # Prevents re-indexing of build outputs, dependencies, etc.
+  exclude_patterns: []
+
+# ═══════════════════════════════════════════════════════════════════════════
+# WORKSPACE CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+# Controls workspace detection, naming, and collection organization.
+
+workspace:
+  # Prefix for ChromaDB collection names.
+  # Collections are named: {collection_prefix}-{workspace_id}-{language}
+  # E.g., "coderag-a1b2c3-python" for workspace a1b2c3 with Python code.
+  # Recommended: "coderag" (matches tool naming).
+  collection_prefix: "coderag"
+
+  # Auto-detect workspaces via markers (go.mod, pyproject.toml, package.json, etc.).
+  # If true: index_project automatically finds project root and assigns ID.
+  # If false: all code goes into a single "default" workspace.
+  # Recommended: true (better for multi-project environments).
+  auto_detect: true
+
+  # Cache workspace detection results in SQLite.
+  # Avoids re-scanning directory tree on subsequent indexes.
+  # Speeds up index_project for large codebases.
+  # Recommended: true (significant performance improvement).
+  cache_enabled: true
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SECURITY CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+# Limits and safeguards to prevent abuse or resource exhaustion.
+
+security:
+  # Maximum file size in MB to index.
+  # Files larger than this are skipped with a warning.
+  # Prevents indexing of large generated files (minified code, compiled binaries).
+  # Recommended: 10 (typical code files are <5MB).
+  max_file_size_mb: 10
+
+  # Regex timeout in milliseconds (for regex-based chunkers).
+  # Prevents ReDoS (Regular Expression Denial of Service) attacks.
+  # Applies to JS, TS, Go, C#, Rust regex patterns.
+  # Recommended: 200 (balance between safety and coverage).
+  regex_timeout_ms: 200
+
+  # Use safe YAML loading only (avoid arbitrary Python code execution).
+  # If true: YAML is loaded with `safe_load()` (recommended).
+  # If false: YAML is loaded with `full_load()` (security risk if untrusted).
+  # Recommended: true (unless you know what you're doing).
+  yaml_safe_load_only: true
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LOGGING CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+# Controls output verbosity and format.
+
+logging:
+  # Log level: "DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL"
+  # DEBUG: verbose (all operations logged, slow)
+  # INFO: normal operation (important events only)
+  # WARNING: only warnings and errors
+  # ERROR: only errors
+  # Recommended: "INFO" for normal use; "DEBUG" for troubleshooting.
+  level: "INFO"
+
+  # Log format: "text" | "json"
+  # text: human-readable (good for stdout/terminal)
+  # json: structured (good for log aggregation systems)
+  # Recommended: "text" for development; "json" for production.
+  format: "text"
+
+  # Log file path.
+  # "" (empty string) = log to stdout only (no file).
+  # "/path/to/logfile.log" = log to both stdout and file.
+  # Useful for debugging after the fact (keep logs in a file).
+  # Recommended: "" for development; provide path in production.
+  file: ""

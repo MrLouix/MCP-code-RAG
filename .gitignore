@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.egg-info/
+
+# venv & env
+.venv/
+venv/
+env/
+
+# RAG index (ChromaDB + SQLite — données persistées locales)
+code_rag_index/
+*.db
+.code_tag_cache.db
+
+# Coverage & cache
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+.vscode-server/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Claude files
+CLAUDE.md
+.claude/
+
+# Docs folder (local tracking only)
+docs/
