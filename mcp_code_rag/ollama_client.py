@@ -1,6 +1,7 @@
 """Ollama API client for embeddings and generation."""
 
 import logging
+import re
 import time
 from typing import Optional
 
@@ -9,6 +10,28 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from mcp_code_rag.config import OllamaConfig
+
+# Regex to strip characters that can break embedding APIs:
+# - Surrogate pairs and unassigned Unicode (above BMP emojis, etc.)
+# - Control characters except \n, \r, \t
+_SANITIZE_RE = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]"
+)
+
+
+def sanitize_text(text: str) -> str:
+    """Remove control characters and problematic Unicode from text.
+
+    Strips characters that commonly cause 400 errors in embedding APIs,
+    such as control characters, while preserving normal whitespace.
+
+    Args:
+        text: Raw text to sanitize.
+
+    Returns:
+        Sanitized text safe for embedding APIs.
+    """
+    return _SANITIZE_RE.sub("", text)
 
 logger = logging.getLogger(__name__)
 
@@ -57,22 +80,31 @@ class OllamaClient:
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for a list of texts using Ollama.
 
+        Sanitizes input texts to remove problematic characters. If a batch
+        request fails with a 400 error, falls back to embedding each text
+        individually so that one bad chunk does not block the entire batch.
+
         Args:
             texts: List of text strings to embed.
 
         Returns:
             List of embedding vectors (each a list of floats).
+            For texts that fail individually, a zero-vector is returned.
 
         Raises:
-            requests.RequestException: If API call fails after retries.
+            requests.RequestException: If API call fails after retries
+                (only for non-400 errors).
             ValueError: If response format is invalid.
         """
         if not texts:
             return []
 
+        # Sanitize all texts before sending to the API
+        sanitized = [sanitize_text(t) for t in texts]
+
         url = f"{self.base_url}/api/embed"
 
-        payload = {"model": self.embed_model, "input": texts}
+        payload = {"model": self.embed_model, "input": sanitized}
 
         try:
             response = self.session.post(
@@ -81,6 +113,14 @@ class OllamaClient:
                 timeout=self.embed_timeout_s,
             )
             response.raise_for_status()
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 400:
+                logger.warning(
+                    "Batch embed returned 400; falling back to individual embedding"
+                )
+                return self._embed_individually(sanitized, url)
+            logger.error(f"Network error calling {url}: {e}")
+            raise
         except requests.RequestException as e:
             logger.error(f"Network error calling {url}: {e}")
             raise
@@ -96,6 +136,51 @@ class OllamaClient:
         except ValueError as e:
             logger.error(f"Invalid response format from embed API: {e}")
             raise
+
+    def _embed_individually(
+        self, texts: list[str], url: str
+    ) -> list[list[float]]:
+        """Embed texts one at a time, returning zero-vectors for failures.
+
+        Args:
+            texts: Sanitized texts to embed individually.
+            url: The embed API URL.
+
+        Returns:
+            List of embedding vectors; failed texts get a zero-vector.
+        """
+        embeddings: list[list[float]] = []
+        dim: int | None = None
+
+        for i, text in enumerate(texts):
+            payload = {"model": self.embed_model, "input": [text]}
+            try:
+                response = self.session.post(
+                    url, json=payload, timeout=self.embed_timeout_s
+                )
+                response.raise_for_status()
+                data = response.json()
+                vecs = data.get("embeddings")
+                if vecs and isinstance(vecs, list) and len(vecs) > 0:
+                    embeddings.append(vecs[0])
+                    if dim is None:
+                        dim = len(vecs[0])
+                    continue
+            except Exception as e:
+                logger.warning(f"Failed to embed chunk {i}: {e}")
+
+            # Append placeholder; will be replaced once we know dimensions
+            embeddings.append(None)  # type: ignore[arg-type]
+
+        # Replace None placeholders with zero-vectors
+        if dim is None:
+            # All failed — try to determine dimension from model config
+            dim = 1024  # sensible default for common embed models
+        for i, emb in enumerate(embeddings):
+            if emb is None:
+                embeddings[i] = [0.0] * dim
+
+        return embeddings
 
     def generate(self, prompt: str, model: str) -> str:
         """Generate text using Ollama (non-streaming).

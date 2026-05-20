@@ -5,7 +5,7 @@ import requests
 from unittest.mock import Mock, patch, MagicMock
 
 from mcp_code_rag.config import OllamaConfig
-from mcp_code_rag.ollama_client import OllamaClient
+from mcp_code_rag.ollama_client import OllamaClient, sanitize_text
 
 
 @pytest.fixture
@@ -307,3 +307,132 @@ class TestOllamaClientRetryLogic:
         # Session should have adapters configured
         assert "http://" in ollama_client.session.adapters
         assert "https://" in ollama_client.session.adapters
+
+
+class TestSanitizeText:
+    """Tests for sanitize_text function."""
+
+    def test_preserves_normal_text(self):
+        assert sanitize_text("hello world") == "hello world"
+
+    def test_preserves_newlines_tabs(self):
+        assert sanitize_text("line1\nline2\ttab") == "line1\nline2\ttab"
+
+    def test_strips_null_bytes(self):
+        assert sanitize_text("hello\x00world") == "helloworld"
+
+    def test_strips_control_chars(self):
+        assert sanitize_text("a\x01b\x02c\x03d") == "abcd"
+
+    def test_preserves_emojis(self):
+        text = "hello 🚀 world 🎉"
+        assert sanitize_text(text) == text
+
+    def test_preserves_unicode_text(self):
+        text = "café résumé naïve"
+        assert sanitize_text(text) == text
+
+    def test_strips_c1_control_chars(self):
+        # C1 control characters (0x80-0x9F)
+        assert sanitize_text("a\x80b\x8fc\x9fd") == "abcd"
+
+    def test_preserves_markdown_formatting(self):
+        text = "# Title\n\n**bold** _italic_ `code`\n- item"
+        assert sanitize_text(text) == text
+
+    def test_empty_string(self):
+        assert sanitize_text("") == ""
+
+
+class TestEmbedSanitization:
+    """Tests for sanitization in the embed method."""
+
+    def test_embed_sanitizes_input(self, ollama_client):
+        """Test that embed sanitizes control characters from input."""
+        with patch.object(ollama_client.session, "post") as mock_post:
+            mock_response = Mock()
+            mock_response.json.return_value = {"embeddings": [[0.1, 0.2]]}
+            mock_post.return_value = mock_response
+
+            ollama_client.embed(["hello\x00world"])
+
+            call_args = mock_post.call_args
+            # The input should have \x00 stripped
+            assert call_args[1]["json"]["input"] == ["helloworld"]
+
+
+class TestEmbedFallback:
+    """Tests for individual fallback on batch 400 errors."""
+
+    def test_fallback_on_400_error(self, ollama_client):
+        """Test that a 400 batch error triggers individual embedding."""
+        mock_400_response = Mock()
+        mock_400_response.status_code = 400
+        mock_400_response.raise_for_status.side_effect = requests.HTTPError(
+            response=mock_400_response
+        )
+
+        mock_ok_response = Mock()
+        mock_ok_response.json.return_value = {"embeddings": [[0.1, 0.2]]}
+
+        with patch.object(ollama_client.session, "post") as mock_post:
+            # First call (batch) returns 400, next two (individual) succeed
+            mock_post.side_effect = [
+                mock_400_response,
+                mock_ok_response,
+                mock_ok_response,
+            ]
+
+            result = ollama_client.embed(["text1", "text2"])
+
+            assert len(result) == 2
+            assert result[0] == [0.1, 0.2]
+            assert result[1] == [0.1, 0.2]
+            # 3 calls: 1 batch + 2 individual
+            assert mock_post.call_count == 3
+
+    def test_fallback_partial_failure_returns_zero_vector(self, ollama_client):
+        """Test that individually-failed chunks get zero-vectors."""
+        mock_400_response = Mock()
+        mock_400_response.status_code = 400
+        mock_400_response.raise_for_status.side_effect = requests.HTTPError(
+            response=mock_400_response
+        )
+
+        mock_ok_response = Mock()
+        mock_ok_response.json.return_value = {"embeddings": [[0.1, 0.2, 0.3]]}
+
+        mock_fail_response = Mock()
+        mock_fail_response.status_code = 400
+        mock_fail_response.raise_for_status.side_effect = requests.HTTPError(
+            response=mock_fail_response
+        )
+
+        with patch.object(ollama_client.session, "post") as mock_post:
+            # Batch fails, first individual succeeds, second individual fails
+            mock_post.side_effect = [
+                mock_400_response,
+                mock_ok_response,
+                mock_fail_response,
+            ]
+
+            result = ollama_client.embed(["good text", "bad\x00text"])
+
+            assert len(result) == 2
+            assert result[0] == [0.1, 0.2, 0.3]
+            # Second chunk should be zero-vector with same dimension
+            assert result[1] == [0.0, 0.0, 0.0]
+
+    def test_non_400_error_still_raises(self, ollama_client):
+        """Test that non-400 HTTP errors are still raised."""
+        mock_500_response = Mock()
+        mock_500_response.status_code = 500
+        mock_500_response.raise_for_status.side_effect = requests.HTTPError(
+            response=mock_500_response
+        )
+
+        with patch.object(ollama_client.session, "post") as mock_post:
+            mock_post.return_value = mock_500_response
+
+            with pytest.raises(requests.HTTPError):
+                ollama_client.embed(["test"])

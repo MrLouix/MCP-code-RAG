@@ -156,6 +156,14 @@ class CodeIngestPipeline:
                 result["errors"].append(f"Embedding count mismatch: expected {len(chunks)}, got {len(embeddings)}")
                 return result
 
+            # Warn about zero-vector embeddings (chunks that failed individually)
+            zero_count = sum(1 for emb in embeddings if all(v == 0.0 for v in emb))
+            if zero_count > 0:
+                logger.warning(
+                    f"{zero_count}/{len(chunks)} chunks in {file_path_abs} "
+                    "got zero-vector embeddings (still indexed for text search)"
+                )
+
             # Store chunks
             for chunk, embedding in zip(chunks, embeddings):
                 self.storage.store_chunk(chunk, embedding, workspace_id)
